@@ -88,11 +88,45 @@ runs:
           esac
         fi
         RUNNER_SPEC="$RUNNER_OS_/$RUNNER_ARCH_"
-        if [ "$RUNNER_KIND" = "github-hosted" ]; then
+
+        # ⚠️ O RUNNER DESTE STEP NÃO É, NECESSARIAMENTE, O DO DEPLOY.
+        #
+        # Em groupanel-v2 e fatura-hub o aviso mora num JOB PRÓPRIO. Medido em
+        # 23/09/2026 no run 35583107771 do groupanel: `Notify start` e
+        # `Notify end` rodaram em `GitHub Actions 1000004094` (hosted) enquanto
+        # `pre-deploy-tests` caiu no `macpro-runner-2` e o `deploy` no
+        # `zeus-groupanel-1`. Reportar o runner LOCAL diria "GitHub-hosted"
+        # para um deploy que rodou em máquina nossa — a linha nasceria mentindo.
+        #
+        # Então, quando dá para perguntar, quem responde é o RUN inteiro: se
+        # QUALQUER job caiu em máquina nossa, o trabalho foi nosso e são esses
+        # nomes que importam. Nada de adivinhar pelo nome do job: um job
+        # renomeado quebraria o filtro em silêncio.
+        RUNNERS_ALL=""
+        if [ -n "$GH_TOKEN" ]; then
+          RUNNERS_ALL=$(curl -sS --max-time 10 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$API_URL/repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" 2>/dev/null \
+            | jq -r '[.jobs[]? | .runner_name // empty] | unique | .[]' 2>/dev/null)
+        fi
+        # `paste -sd ', '` usaria ',' e ' ' como delimitadores ALTERNADOS, não
+        # como separador de dois caracteres: com 3 runners sairia "a,b c".
+        RUNNERS_OURS=$(printf '%s\n' "$RUNNERS_ALL" | grep -v '^GitHub Actions' | grep -v '^$' | paste -sd, - | sed 's/,/, /g')
+
+        if [ -n "$RUNNERS_OURS" ]; then
+          # Nome do runner = a máquina da frota (zeus-groupanel-1,
+          # macpro-runner-3...). É ele que diz para onde ir quando dá ruim.
+          if [ "$RUNNER_KIND" != "github-hosted" ] && [ "$RUNNERS_OURS" = "$RUNNER_NAME_" ]; then
+            RUNNER_LINE=$(printf "\n🖥️ %s · nosso (%s)" "$RUNNERS_OURS" "$RUNNER_SPEC")
+          else
+            RUNNER_LINE=$(printf "\n🖥️ %s · nosso" "$RUNNERS_OURS")
+          fi
+        elif [ -n "$RUNNERS_ALL" ]; then
+          RUNNER_LINE=$(printf "\n🖥️ GitHub-hosted")
+        elif [ "$RUNNER_KIND" = "github-hosted" ]; then
           RUNNER_LINE=$(printf "\n🖥️ GitHub-hosted (%s)" "$RUNNER_SPEC")
         else
-          # Nome do runner = a máquina da frota (guzz-harness-runner-1,
-          # macpro-runner-3...). É ele que diz para onde ir quando dá ruim.
           RUNNER_LINE=$(printf "\n🖥️ %s · nosso (%s)" "$RUNNER_NAME_" "$RUNNER_SPEC")
         fi
 
@@ -133,11 +167,21 @@ runs:
           if [ -f "$STAMP" ]; then
             STARTED=$(cat "$STAMP" 2>/dev/null)
           elif [ -n "$GH_TOKEN" ]; then
+            # Pelo ATTEMPT, não pelo run: `/runs/{id}` devolve o início da
+            # PRIMEIRA tentativa, e um re-run feito no dia seguinte sairia
+            # anunciando um deploy de 20 horas.
             STARTED_ISO=$(curl -sS --max-time 10 \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
-              "$API_URL/repos/$REPO/actions/runs/$RUN_ID" 2>/dev/null \
+              "$API_URL/repos/$REPO/actions/runs/$RUN_ID/attempts/${RUN_ATTEMPT:-1}" 2>/dev/null \
               | jq -r '.run_started_at // empty' 2>/dev/null)
+            if [ -z "$STARTED_ISO" ]; then
+              STARTED_ISO=$(curl -sS --max-time 10 \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "$API_URL/repos/$REPO/actions/runs/$RUN_ID" 2>/dev/null \
+                | jq -r '.run_started_at // empty' 2>/dev/null)
+            fi
             if [ -n "$STARTED_ISO" ]; then
               STARTED=$(date -u -d "$STARTED_ISO" +%s 2>/dev/null)
             fi
