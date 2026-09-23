@@ -1,0 +1,90 @@
+name: Self-test (não envia nada)
+
+# Prova a mensagem NO AMBIENTE REAL, sem mandar WhatsApp.
+#
+# Os testes que se rodam na mão simulam `runner.environment`, `runner.name` e
+# a API — ou seja, provam o shell e não o Actions. Este workflow roda a action
+# de verdade e deixa a mensagem montada no log. `uazapi_base_url` vazia faz a
+# action sair ANTES do curl: nada chega em grupo nenhum.
+#
+# Os três jobs cobrem as três formas que a frota usa:
+#   hosted      — fatura-hub, prompt-pages-funnel (ubuntu-latest)
+#   nosso       — iHub, studio-app (aviso e deploy no MESMO job self-hosted)
+#   cross-job   — groupanel-v2, fatura-hub (aviso em job separado do trabalho)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  hosted:
+    name: hosted (deve dizer GitHub-hosted)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          status: start
+          project: selftest-hosted
+          uazapi_token: ""
+          uazapi_base_url: ""
+          group_jid: ""
+      - uses: ./
+        with:
+          status: success
+          project: selftest-hosted
+          prod_url: https://exemplo.invalido
+          uazapi_token: ""
+          uazapi_base_url: ""
+          group_jid: ""
+
+  nosso:
+    name: nosso (deve dizer o nome da máquina)
+    runs-on: [self-hosted, linux, arm64, hdbr]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          status: start
+          project: selftest-nosso
+          uazapi_token: ""
+          uazapi_base_url: ""
+          group_jid: ""
+      - uses: ./
+        with:
+          status: success
+          project: selftest-nosso
+          prod_url: https://exemplo.invalido
+          uazapi_token: ""
+          uazapi_base_url: ""
+          group_jid: ""
+
+  # O caso que quase passou batido: o aviso sai de um runner hosted enquanto o
+  # trabalho aconteceu em máquina nossa. A linha tem que nomear a máquina do
+  # TRABALHO — e a duração tem que atravessar a fronteira do job pela API.
+  cross_job_trabalho:
+    name: cross-job — trabalho em máquina nossa
+    runs-on: [self-hosted, linux, arm64, hdbr]
+    timeout-minutes: 5
+    steps:
+      - run: echo "trabalho de mentira, só para ocupar um runner nosso"
+
+  cross_job_aviso:
+    name: cross-job — aviso em runner hosted
+    needs: cross_job_trabalho
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          status: success
+          project: selftest-cross-job
+          uazapi_token: ""
+          uazapi_base_url: ""
+          group_jid: ""
