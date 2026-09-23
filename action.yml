@@ -24,6 +24,10 @@ inputs:
   group_jid:
     description: "JID do grupo WhatsApp"
     required: true
+  github_token:
+    description: "Token só de leitura usado para descobrir o início do run quando `start` e `success` estão em JOBS diferentes (a duração sai sem ele apenas nesse caso)"
+    required: false
+    default: ${{ github.token }}
 runs:
   using: composite
   steps:
@@ -36,13 +40,34 @@ runs:
         UAZAPI_TOKEN: ${{ inputs.uazapi_token }}
         UAZAPI_BASE_URL: ${{ inputs.uazapi_base_url }}
         GROUP_JID: ${{ inputs.group_jid }}
+        GH_TOKEN: ${{ inputs.github_token }}
         BRANCH: ${{ github.ref_name }}
         AUTHOR: ${{ github.event.head_commit.author.name }}
         COMMIT_MSG: ${{ github.event.head_commit.message }}
         SHA: ${{ github.sha }}
         REPO: ${{ github.repository }}
         SERVER_URL: ${{ github.server_url }}
+        API_URL: ${{ github.api_url }}
         RUN_ID: ${{ github.run_id }}
+        # 🖥️ ONDE O DEPLOY RODOU — o motivo destes quatro campos existirem.
+        #
+        # Os deploys da frota pedem `runs-on: [self-hosted, linux, arm64, hdbr]`:
+        # isso é um LABEL, não uma máquina. O mesmo job cai no guzz hoje e num
+        # macpro-runner amanhã, e o aviso saía idêntico nos dois casos — sem
+        # dizer sequer se o trabalho foi para o GitHub ou para uma máquina nossa.
+        # Quando um runner nosso adoece (disco cheio, Atenas starvando), o aviso
+        # não ajudava a achar a máquina: era preciso abrir o run no GitHub.
+        #
+        # `runner.environment` é `github-hosted` ou `self-hosted`, e vem do
+        # próprio runner (>= 2.293). Runner antigo devolve vazio — por isso há
+        # heurística pelo nome (o hosted se chama "GitHub Actions <n>") abaixo.
+        RUNNER_ENVIRONMENT_: ${{ runner.environment }}
+        RUNNER_NAME_: ${{ runner.name }}
+        RUNNER_OS_: ${{ runner.os }}
+        RUNNER_ARCH_: ${{ runner.arch }}
+        EVENT_NAME: ${{ github.event_name }}
+        ACTOR: ${{ github.actor }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
       run: |
         set +e
         SHA_SHORT=$(echo "$SHA" | cut -c1-7)
@@ -52,6 +77,87 @@ runs:
           ENV_LABEL="🚀 Produção"
         else
           ENV_LABEL="🧪 Preview"
+        fi
+
+        # --- Onde rodou ------------------------------------------------------
+        RUNNER_KIND="$RUNNER_ENVIRONMENT_"
+        if [ -z "$RUNNER_KIND" ]; then
+          case "$RUNNER_NAME_" in
+            "GitHub Actions"*) RUNNER_KIND="github-hosted" ;;
+            *)                 RUNNER_KIND="self-hosted" ;;
+          esac
+        fi
+        RUNNER_SPEC="$RUNNER_OS_/$RUNNER_ARCH_"
+        if [ "$RUNNER_KIND" = "github-hosted" ]; then
+          RUNNER_LINE=$(printf "\n🖥️ GitHub-hosted (%s)" "$RUNNER_SPEC")
+        else
+          # Nome do runner = a máquina da frota (guzz-harness-runner-1,
+          # macpro-runner-3...). É ele que diz para onde ir quando dá ruim.
+          RUNNER_LINE=$(printf "\n🖥️ %s · nosso (%s)" "$RUNNER_NAME_" "$RUNNER_SPEC")
+        fi
+
+        # --- Quem disparou ---------------------------------------------------
+        # Sem `head_commit` (workflow_dispatch, schedule, repository_dispatch) o
+        # autor e a mensagem saíam VAZIOS — duas linhas em branco no grupo.
+        if [ -z "$AUTHOR" ]; then
+          AUTHOR="@$ACTOR"
+        fi
+        if [ -z "$COMMIT_FIRST" ]; then
+          COMMIT_FIRST=$(git log -1 --pretty=%s 2>/dev/null)
+          [ -z "$COMMIT_FIRST" ] && COMMIT_FIRST="(sem commit no evento)"
+        fi
+        case "$EVENT_NAME" in
+          push)               TRIGGER_LINE="" ;;
+          workflow_dispatch)  TRIGGER_LINE=$(printf "\n🖐️ disparo manual") ;;
+          schedule)           TRIGGER_LINE=$(printf "\n⏰ disparo agendado") ;;
+          *)                  TRIGGER_LINE=$(printf "\n⚡ evento: %s" "$EVENT_NAME") ;;
+        esac
+        # Re-run: a 2ª tentativa do MESMO commit já foi confundida com deploy
+        # novo. O aviso passa a dizer que é repique.
+        if [ -n "$RUN_ATTEMPT" ] && [ "$RUN_ATTEMPT" -gt 1 ] 2>/dev/null; then
+          TRIGGER_LINE="$TRIGGER_LINE$(printf "\n🔁 tentativa %s" "$RUN_ATTEMPT")"
+        fi
+
+        # --- Duração ---------------------------------------------------------
+        # `start` grava o relógio; `success`/`failure` leem. Funciona no mesmo
+        # job. Quando o `start` está em OUTRO job (groupanel-v2, fatura-hub), o
+        # RUNNER_TEMP daquele job já morreu: aí o início vem da API (run_started_at).
+        STAMP_DIR="${RUNNER_TEMP:-/tmp}"
+        STAMP="$STAMP_DIR/notify-whatsapp-start-$RUN_ID-$RUN_ATTEMPT"
+        NOW=$(date +%s)
+        DURATION_LINE=""
+        if [ "$STATUS" = "start" ]; then
+          echo "$NOW" > "$STAMP" 2>/dev/null
+        else
+          STARTED=""
+          if [ -f "$STAMP" ]; then
+            STARTED=$(cat "$STAMP" 2>/dev/null)
+          elif [ -n "$GH_TOKEN" ]; then
+            STARTED_ISO=$(curl -sS --max-time 10 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$API_URL/repos/$REPO/actions/runs/$RUN_ID" 2>/dev/null \
+              | jq -r '.run_started_at // empty' 2>/dev/null)
+            if [ -n "$STARTED_ISO" ]; then
+              STARTED=$(date -u -d "$STARTED_ISO" +%s 2>/dev/null)
+            fi
+          fi
+          case "$STARTED" in
+            ''|*[!0-9]*) STARTED="" ;;
+          esac
+          if [ -n "$STARTED" ]; then
+            ELAPSED=$((NOW - STARTED))
+            if [ "$ELAPSED" -ge 0 ]; then
+              if [ "$ELAPSED" -lt 60 ]; then
+                HUMAN="${ELAPSED}s"
+              elif [ "$ELAPSED" -lt 3600 ]; then
+                HUMAN=$(printf "%dm%02ds" $((ELAPSED / 60)) $((ELAPSED % 60)))
+              else
+                HUMAN=$(printf "%dh%02dm" $((ELAPSED / 3600)) $((ELAPSED % 3600 / 60)))
+              fi
+              DURATION_LINE=$(printf "\n⏱️ %s" "$HUMAN")
+            fi
+          fi
         fi
 
         case "$STATUS" in
@@ -81,11 +187,16 @@ runs:
             ;;
         esac
 
-        TEXT=$(printf "%s\n━━━━━━━━━━━━━━━━━\n📦 %s\n🌎 %s · %s%s\n\n👤 %s\n💬 %s\n🔖 %s\n\n🔗 %s" \
+        TEXT=$(printf "%s\n━━━━━━━━━━━━━━━━━\n📦 %s\n🌎 %s · %s%s%s%s%s\n\n👤 %s\n💬 %s\n🔖 %s\n\n🔗 %s" \
           "$HEADER" \
-          "$PROJECT" "$ENV_LABEL" "$BRANCH" "$EXTRA" \
+          "$PROJECT" "$ENV_LABEL" "$BRANCH" "$EXTRA" "$RUNNER_LINE" "$DURATION_LINE" "$TRIGGER_LINE" \
           "$AUTHOR" "$COMMIT_FIRST" "$SHA_SHORT" \
           "$RUN_URL")
+
+        # A mensagem vai para o log: o grupo de destino mora num secret, então
+        # sem isto o repositório fica mudo sobre o que foi enviado.
+        echo "[notify-whatsapp] mensagem montada:"
+        printf '%s\n' "$TEXT"
 
         PAYLOAD=$(jq -n --arg n "$GROUP_JID" --arg t "$TEXT" '{number:$n, text:$t, linkPreview:false}')
 
@@ -99,7 +210,7 @@ runs:
           -H "token: $UAZAPI_TOKEN" \
           -d "$PAYLOAD")
 
-        echo "[notify-whatsapp] status=$STATUS http=$HTTP_CODE"
+        echo "[notify-whatsapp] status=$STATUS http=$HTTP_CODE runner=$RUNNER_NAME_ ($RUNNER_KIND)"
         cat /tmp/notify_resp.json 2>/dev/null || true
         echo ""
         # non-blocking: notification failure must NOT fail the workflow
