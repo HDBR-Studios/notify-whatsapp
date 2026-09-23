@@ -49,12 +49,20 @@ Composite GitHub Action que envia notificação de deploy para um grupo WhatsApp
 
 ## O que cada linha responde
 
-- **🖥️ Runner** — em máquina nossa sai o nome do runner (`guzz-harness-runner-1`,
+- **🖥️ Runner** — em máquina nossa sai o nome do runner (`zeus-groupanel-1`,
   `macpro-runner-3`) com a marca `· nosso`; no GitHub sai `GitHub-hosted`. Existe
   porque os deploys da frota pedem `runs-on: [self-hosted, linux, arm64, hdbr]`, que
-  é um **label e não uma máquina**: o mesmo job cai no guzz hoje e num macpro amanhã,
+  é um **label e não uma máquina**: o mesmo job cai no zeus hoje e num macpro amanhã,
   e o aviso saía igual nos dois casos. Quando um runner nosso adoece, esta linha diz
   para qual máquina ir sem precisar abrir o run.
+
+  O runner reportado é o de **quem fez o trabalho**, não o deste step. Em
+  `groupanel-v2` e `fatura-hub` o aviso mora num job próprio que cai em
+  GitHub-hosted enquanto o deploy roda em máquina nossa — reportar o runner local
+  faria a linha nascer mentindo. Com token, a action lê os jobs do run: se
+  **qualquer** job caiu em máquina nossa, são esses nomes que aparecem. O os/arch
+  só entra quando o trabalho e o aviso estão no mesmo runner (é a única situação em
+  que são o mesmo hardware). Sem token, sobra o runner local.
 - **⏱️ Duração** — tempo entre o aviso de `start` e o de fechamento. O `start`
   grava o relógio em `$RUNNER_TEMP`; se o fechamento acontece em outro job, o
   início vem de `run_started_at` pela API. Sem nenhuma das duas fontes, a linha
