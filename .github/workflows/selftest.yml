@@ -14,6 +14,11 @@ name: Self-test (não envia nada)
 
 on:
   workflow_dispatch:
+    inputs:
+      com_runner_nosso:
+        description: "Incluir os jobs que exigem runner self-hosted (só marque se este repo alcançar o runner group)"
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -42,8 +47,14 @@ jobs:
           uazapi_base_url: ""
           group_jid: ""
 
+  # ⚠️ Os dois jobs abaixo só rodam sob pedido: medido em 23/09/2026, ESTE repo
+  # tem 0 runners próprios e não alcança o runner group da org, então um job
+  # `self-hosted` aqui fica em fila até expirar (24h) em vez de falhar. O
+  # caminho "máquina nossa" é exercitado de verdade a cada deploy do iHub, do
+  # groupanel-v2 e do studio-app.
   nosso:
     name: nosso (deve dizer o nome da máquina)
+    if: inputs.com_runner_nosso
     runs-on: [self-hosted, linux, arm64, hdbr]
     timeout-minutes: 5
     steps:
@@ -69,6 +80,7 @@ jobs:
   # TRABALHO — e a duração tem que atravessar a fronteira do job pela API.
   cross_job_trabalho:
     name: cross-job — trabalho em máquina nossa
+    if: inputs.com_runner_nosso
     runs-on: [self-hosted, linux, arm64, hdbr]
     timeout-minutes: 5
     steps:
