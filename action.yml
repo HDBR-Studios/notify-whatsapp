@@ -206,21 +206,17 @@ runs:
 
         case "$STATUS" in
           start)
-            HEADER="🚀 *Deploy INICIADO*"
+            HEADER="🚀 *Deploy iniciado:*"
             EXTRA=""
             ;;
           success)
-            HEADER="✅ *Deploy CONCLUÍDO*"
-            if [ -n "$PROD_URL" ]; then
-              EXTRA=$(printf "\n🌐 %s" "$PROD_URL")
-            else
-              EXTRA=""
-            fi
+            HEADER="✅ *Deploy concluído:*"
+            EXTRA=""
             ;;
           failure)
-            HEADER="❌ *Deploy FALHOU*"
+            HEADER="❌ *Deploy falhou:*"
             if [ -n "$FAILED_STEP" ]; then
-              EXTRA=$(printf "\n💥 Falhou em: *%s*" "$FAILED_STEP")
+              EXTRA=$(printf "\n• *Falhou em:* %s" "$FAILED_STEP")
             else
               EXTRA=""
             fi
@@ -231,11 +227,20 @@ runs:
             ;;
         esac
 
-        TEXT=$(printf "%s\n━━━━━━━━━━━━━━━━━\n📦 %s\n🌎 %s · %s%s%s%s%s\n\n👤 %s\n💬 %s\n🔖 %s\n\n🔗 %s" \
-          "$HEADER" \
-          "$PROJECT" "$ENV_LABEL" "$BRANCH" "$EXTRA" "$RUNNER_LINE" "$DURATION_LINE" "$TRIGGER_LINE" \
-          "$AUTHOR" "$COMMIT_FIRST" "$SHA_SHORT" \
-          "$RUN_URL")
+        # Molde do Hildel (06/10/2026, nt_fmt_sim e nt_fmt2_sim): projeto e ambiente no título, o
+        # commit em > citação, detalhes em • *termo*, sha em `código`, links SOLTOS na linha deles
+        # (citado ou em código o WhatsApp não mostra prévia nem deixa clicar), sem régua.
+        RUNNER_TXT="${RUNNER_LINE#$'\n'🖥️ }"
+        DUR_TXT="${DURATION_LINE#$'\n'⏱️ }"
+        MAQUINA=""
+        [ -n "$RUNNER_TXT" ] && MAQUINA=$(printf "\n• *Máquina:* %s%s" "$RUNNER_TXT" "${DUR_TXT:+ · _${DUR_TXT}_}")
+        LINKS="$RUN_URL"
+        [ "$STATUS" = "success" ] && [ -n "$PROD_URL" ] && LINKS=$(printf "%s\n%s" "$PROD_URL" "$RUN_URL")
+        TEXT=$(printf "%s %s · _%s_\n\n> %s\n\n• *Commit:* \`%s\` · _%s_\n• *Autor:* %s%s%s%s\n\n%s" \
+          "$HEADER" "$PROJECT" "${ENV_LABEL#* }" \
+          "$COMMIT_FIRST" \
+          "$SHA_SHORT" "$BRANCH" "$AUTHOR" "$MAQUINA" "$EXTRA" "$TRIGGER_LINE" \
+          "$LINKS")
 
         # A mensagem vai para o log: o grupo de destino mora num secret, então
         # sem isto o repositório fica mudo sobre o que foi enviado.
