@@ -1,0 +1,24 @@
+name: Testes (sem rede, sem envio)
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: tests/*.test.sh
+        run: |
+          set -e
+          for t in tests/*.test.sh; do
+            echo "::group::$t"
+            bash "$t"
+            echo "::endgroup::"
+          done
