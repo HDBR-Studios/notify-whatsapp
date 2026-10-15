@@ -140,6 +140,59 @@ runs:
           COMMIT_FIRST=$(git log -1 --pretty=%s 2>/dev/null)
           [ -z "$COMMIT_FIRST" ] && COMMIT_FIRST="(sem commit no evento)"
         fi
+
+        # --- Autor da PR -----------------------------------------------------
+        # O push de um merge traz em `head_commit.author` QUEM MERGEOU, não quem
+        # fez a PR. Medido em 15/10/2026 no criart-convex: a PR #240 era do
+        # Lucas e o aviso disse "Autor: Hildelbrando Lins" (commit 21e3469,
+        # autor = conta que clicou em merge). Aqui a action procura a PR que
+        # gerou ESTE commit e passa a dizer os dois: autor da PR e quem mergeou.
+        #
+        # Só vale em `push` e só com a PR cujo `merge_commit_sha` é o próprio
+        # SHA: um commit solto que só aparece dentro de uma PR não é atribuído.
+        # Duas portas, porque o token padrão dos consumidores (restrito:
+        # contents/metadata/packages) não lê `commits/{sha}/pulls`, que exige
+        # `pull-requests: read`; o número da PR na mensagem do merge ("Merge
+        # pull request #N" ou "(#N)" do squash) abre `pulls/{n}`. Sem PR ou sem
+        # permissão, fica o autor do commit, como antes.
+        if [ "$EVENT_NAME" = "push" ] && [ -n "$GH_TOKEN" ] && [ -n "$SHA" ]; then
+          gh_get() {
+            curl -sS --max-time 10 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$API_URL/$1" 2>/dev/null
+          }
+          PR_NUM=$(gh_get "repos/$REPO/commits/$SHA/pulls" \
+            | jq -r --arg sha "$SHA" '[.[]? | select(.merged_at != null and .merge_commit_sha == $sha) | .number][0] // empty' 2>/dev/null)
+          if [ -z "$PR_NUM" ]; then
+            PR_NUM=$(printf '%s\n' "$COMMIT_FIRST" \
+              | sed -nE 's/^Merge pull request #([0-9]+) from .*/\1/p; s/.*\(#([0-9]+)\)$/\1/p' | head -1)
+          fi
+          PR_INFO=""
+          if [ -n "$PR_NUM" ]; then
+            PR_INFO=$(gh_get "repos/$REPO/pulls/$PR_NUM" \
+              | jq -r --arg sha "$SHA" 'select(.merged_at != null and .merge_commit_sha == $sha) | [.number, .user.login, (.merged_by.login // "")] | @tsv' 2>/dev/null)
+          fi
+          if [ -n "$PR_INFO" ]; then
+            IFS=$'\t' read -r PR_N PR_AUTOR_LOGIN PR_MERGER_LOGIN <<< "$PR_INFO"
+            # Nome de exibição (1º nome), como o Hildel escreve; sem nome, o login.
+            primeiro_nome() {
+              local n
+              n=$(gh_get "users/$1" | jq -r '.name // empty' 2>/dev/null)
+              n="${n%% *}"
+              printf '%s' "${n:-$1}"
+            }
+            PR_AUTOR=$(primeiro_nome "$PR_AUTOR_LOGIN")
+            AUTHOR="$PR_AUTOR (PR #$PR_N)"
+            [ -z "$PR_MERGER_LOGIN" ] && PR_MERGER_LOGIN="$ACTOR"
+            if [ -n "$PR_MERGER_LOGIN" ] && [ "$PR_MERGER_LOGIN" != "$PR_AUTOR_LOGIN" ]; then
+              AUTHOR="$AUTHOR · mergeado por $(primeiro_nome "$PR_MERGER_LOGIN")"
+            fi
+            echo "[notify-whatsapp] autor da PR #$PR_N: $PR_AUTOR_LOGIN (merge: ${PR_MERGER_LOGIN:-?})"
+          else
+            echo "[notify-whatsapp] PR deste commit não encontrada (push direto, ou token sem 'pull-requests: read'); autor = commit"
+          fi
+        fi
         case "$EVENT_NAME" in
           push)               TRIGGER_LINE="" ;;
           workflow_dispatch)  TRIGGER_LINE=$(printf "\n🖐️ disparo manual") ;;

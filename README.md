@@ -27,7 +27,7 @@ Composite GitHub Action que envia notificação de deploy para um grupo WhatsApp
 | `group_jid` | sim | JID do grupo WhatsApp destino |
 | `prod_url` | não | URL de produção (exibida em sucesso) |
 | `failed_step` | não | Nome do passo que falhou (exibido em failure) |
-| `github_token` | não | Default `${{ github.token }}`. Só serve para descobrir a duração quando `start` e `success` estão em **jobs diferentes**; sem ele a mensagem sai sem a linha de tempo nesse caso |
+| `github_token` | não | Default `${{ github.token }}`. Serve para descobrir a duração quando `start` e `success` estão em **jobs diferentes** e para achar o **autor da PR** num push de merge; sem ele essas duas coisas caem para o comportamento antigo |
 
 ## Exemplo de mensagem
 
@@ -73,15 +73,47 @@ Composite GitHub Action que envia notificação de deploy para um grupo WhatsApp
   eventos. Nesses casos não existe `head_commit`: antes o autor e a mensagem
   saíam **em branco**; agora caem para `@actor` e para o assunto do último commit.
 
+- **👤 Autor** — num `push` que veio do merge de uma PR, sai o autor da PR e
+  quem mergeou: `Lucas (PR #240) · mergeado por Hildelbrando` (só
+  `Lucas (PR #240)` quando o autor mergeou a própria PR). Existe porque o
+  `head_commit.author` de um merge é **quem clicou em merge**: em 15/10/2026 a
+  PR #240 do criart-convex era do Lucas e o aviso disse "Hildelbrando Lins".
+  A PR só é atribuída se o `merge_commit_sha` dela for o próprio commit do
+  deploy. Sem PR (push direto, `workflow_dispatch`, `schedule`) ou sem
+  permissão, fica o autor do commit, como antes.
+
+  **Permissão:** `commits/{sha}/pulls` exige `pull-requests: read`, que o token
+  padrão restrito (`contents`/`metadata`/`packages`) não tem. Por isso há uma
+  2ª porta: o número da PR na mensagem do merge (`Merge pull request #N`, ou
+  `(#N)` do squash) abre `pulls/{n}`. Para não depender dela, o workflow do
+  consumidor pode declarar:
+
+  ```yaml
+  permissions:
+    contents: read
+    pull-requests: read
+    actions: read   # também devolve a duração quando o aviso está em outro job
+  ```
+
+  Atenção: um bloco `permissions:` zera o que não estiver listado; confira o
+  que o resto do workflow usa antes de colocá-lo.
+
 ## Comportamento
 
 - **Non-blocking**: se a UAZAPI falhar ou a `uazapi_base_url` não estiver configurada, o action sai com `exit 0` (não derruba o workflow)
 - **Sem link preview**: a mensagem é enviada com `linkPreview: false`
 - **Logs**: imprime a mensagem montada, o status HTTP, a resposta da UAZAPI e o runner usado. O grupo de destino mora num secret — sem esse log o repositório fica mudo sobre o que foi enviado e para onde
 
+## Testes
+
+`tests/*.test.sh` rodam a action **sem rede e sem envio** (o `curl` vira dublê
+com fixtures da API) e entram no CI em toda PR. O `selftest.yml` roda a action
+de verdade no Actions, também sem enviar.
+
 ## Versionamento
 
 Use sempre uma tag fixa (`@v1`) em vez de `@main` pra evitar quebras inesperadas.
 A `v1` é móvel: ela anda junto com as melhorias compatíveis (a linha do runner
-entrou nela em 23/09/2026, na `v1.1`). Consumidores hoje: `app-hdbr-ihub`,
+entrou nela em 23/09/2026, na `v1.1`). O autor da PR entra na `v1.2`; mover
+a `v1` para ela é decisão à parte, depois de conferir os consumidores. Consumidores hoje: `app-hdbr-ihub`,
 `groupanel-v2`, `studio-app`, `fatura-hub`, `prompt-pages-funnel`.
