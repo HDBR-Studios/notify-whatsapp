@@ -55,7 +55,7 @@ jobs:
   nosso:
     name: nosso (deve dizer o nome da máquina)
     if: inputs.com_runner_nosso
-    runs-on: [self-hosted, linux, arm64, hdbr]
+    runs-on: ["hdbr-ci"]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -81,7 +81,7 @@ jobs:
   cross_job_trabalho:
     name: cross-job — trabalho em máquina nossa
     if: inputs.com_runner_nosso
-    runs-on: [self-hosted, linux, arm64, hdbr]
+    runs-on: ["hdbr-ci"]
     timeout-minutes: 5
     steps:
       - run: echo "trabalho de mentira, só para ocupar um runner nosso"
